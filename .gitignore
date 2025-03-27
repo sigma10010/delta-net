@@ -1,9 +1,0 @@
-__pycache__/
-checkpoints/
-gc/
-gc_/
-gc_.rar
-*.tar
-*.zip
-*.ipynb
-!subject-boxplot.ipynb
