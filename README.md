@@ -1,3 +1,5 @@
+pre-processing steps:
+
 GazeCapture.tar -> gc_tar
 
 tar -xf GazeCapture.tar -C gc_tar
