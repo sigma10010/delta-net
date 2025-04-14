@@ -18,6 +18,7 @@ from models.gaze_transformer import GazeTR, BaseTR
 from models.sfo import SFOModel
 from models.full_face import FullFace, FullFaceDelta
 from models.aff_net import AFFModel, AFFDelta
+from models.sask import SASKModel
 from losses import GazeLoss, GazeOriLoss
 
 from collections import OrderedDict
@@ -55,8 +56,8 @@ doTest = args.sink # Only run test, no training
 isBaseModel = not args.is_delta
 
 workers = 16
-epochs = 30
-batch_size = torch.cuda.device_count()*40 # Change if out of cuda memory, sfo 40, tr 50
+epochs = 25
+batch_size = torch.cuda.device_count()*100 # Change if out of cuda memory, sfo 40, tr 50
 
 base_lr = 0.0001 #tr 0.0001
 momentum = 0.9
@@ -74,9 +75,10 @@ def main():
 
     if args.model_type == 'base':
         # model = ITrackerModel()
-        model = BaseTR()
+        # model = BaseTR()
         # model = AFFModel()
         # model = FullFace()
+        model = SASKModel()
     elif args.model_type == 'delta':
         model = DeltaGazeModel()
     elif args.model_type == 'sfo':
@@ -617,11 +619,11 @@ def testDelta(val_loader, model, epoch, numCalib):
 CHECKPOINTS_PATH = './checkpoints/'
 
 def load_checkpoint(is_best, filename='ckpt.pth.tar', model_type='delta'):
-    # filename = model_type +'_'+ filename
+    filename = model_type +'_SK_'+ filename
     # filename = model_type +'_BAM_'+ filename
     # filename = model_type + 'TR_iPad_' + filename
     # filename = model_type +'TR_'+ filename
-    filename = model_type + '_iPad_' + filename
+    # filename = model_type + '_iPad_' + filename
     # filename = model_type + '_sim_' + filename
     # filename = model_type + '_ori_' + filename
     bestFilename = os.path.join(CHECKPOINTS_PATH, 'best_' + filename)
@@ -639,7 +641,7 @@ def load_checkpoint(is_best, filename='ckpt.pth.tar', model_type='delta'):
 def save_checkpoint(state, is_best, filename='ckpt.pth.tar', model_type='delta'):
     if not os.path.isdir(CHECKPOINTS_PATH):
         os.makedirs(CHECKPOINTS_PATH, 0o777)
-    # filename = model_type +'_'+ filename
+    filename = model_type +'_SK_'+ filename
     # filename = model_type +'_BAM_'+ filename
     # filename = model_type + 'TR_iPad_' + filename
     # filename = model_type +'TR_'+ filename

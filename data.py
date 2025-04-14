@@ -170,7 +170,7 @@ class ITrackerData(data.Dataset):
         return len(self.indices)
       
 class DeltaGazeData(data.Dataset):
-    def __init__(self, dataPath, split='train', imSize=(128,128), faceSize = (224,224), gridSize=(25, 25), numCalib=1):
+    def __init__(self, dataPath, split='train', imSize=(128,128), faceSize = (256,256), gridSize=(25, 25), numCalib=1):
 
         self.dataPath = dataPath
         self.imSize = imSize
@@ -180,8 +180,8 @@ class DeltaGazeData(data.Dataset):
         self.dataAug = True if split=='train' else False
 
         print('Loading delta dataset...')
-        # metaFile = os.path.join(META_PATH, 'metadata_device.mat')
-        metaFile = os.path.join(META_PATH, 'metadata9.mat') # for sfo
+        metaFile = os.path.join(META_PATH, 'metadata_device.mat')
+        # metaFile = os.path.join(META_PATH, 'metadata9.mat') # for sfo
         #metaFile = 'metadata.mat'
         if metaFile is None or not os.path.isfile(metaFile):
             raise RuntimeError('There is no such file %s! Provide a valid dataset path.' % metaFile)
@@ -196,7 +196,7 @@ class DeltaGazeData(data.Dataset):
         self.transformFace = transforms.Compose([
             transforms.Resize(self.faceSize),
             transforms.ToTensor(),
-            SubtractMean(meanImg=self.faceMean),
+            SubtractMean(meanImg=self.faceMean, imSize = self.faceSize),
         ])
         self.transformEyeL = transforms.Compose([
             transforms.Resize(self.imSize),
@@ -213,7 +213,7 @@ class DeltaGazeData(data.Dataset):
         if split == 'test':
             mask = self.metadata['labelTest']
             
-            mask_iphone = [self.metadata['device'][i].startswith("iPad") for i in range(len(self.metadata['device']))] # iPhone/iPad
+            mask_iphone = [self.metadata['device'][i].startswith("iPhone") for i in range(len(self.metadata['device']))] # iPhone/iPad
             mask_iphone = np.array(mask_iphone)
             mask = mask * mask_iphone # test on iphone only
             
@@ -225,7 +225,7 @@ class DeltaGazeData(data.Dataset):
             # mask_val = self.metadata['labelVal']
             # mask += mask_val
 
-            mask_iphone = [self.metadata['device'][i].startswith("iPad") for i in range(len(self.metadata['device']))]
+            mask_iphone = [self.metadata['device'][i].startswith("iPhone") for i in range(len(self.metadata['device']))]
             mask_iphone = np.array(mask_iphone)
             mask = mask * mask_iphone # train on iphone only
             
