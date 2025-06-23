@@ -1,14 +1,14 @@
 import os
 import tarfile
 
-path = "/sunyb01/gaze/gc_tar/"
-path_des = "/sunyb01/gaze/gc/"
+path = "/home/sigma/gaze/datasets/GazeCapture/"
+path_des = "/home/sigma/gaze/datasets/gc/"
 files = os.listdir(path)
 print(len(files))
 
 for i, filename in enumerate(files):
-    if i<1017:
-        continue
+    # if i<1017:
+        # continue
     print(i)
     if filename.endswith('tar.gz'):
         # open file 

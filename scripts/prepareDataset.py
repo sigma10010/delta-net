@@ -3,6 +3,11 @@ import numpy as np
 import scipy.io as sio
 from PIL import Image
 
+import cv2
+import torch
+# from moge.model.v1 import MoGeModel
+from moge.model.v2 import MoGeModel # Let's try MoGe-2
+
 
 '''
 Prepares the GazeCapture dataset for use with the pytorch code. Crops images, compiles JSONs into metadata.mat
@@ -27,11 +32,12 @@ Booktitle = {IEEE Conference on Computer Vision and Pattern Recognition (CVPR)}
 '''
 
 parser = argparse.ArgumentParser(description='iTracker-pytorch-PrepareDataset.')
-parser.add_argument('--dataset_path', default='/sunyb01/gaze/gc/', help="Path to extracted files. It should have folders called '%%05d' in it.")
-parser.add_argument('--output_path', default='/sunyb01/gaze/gc_processed/', help="Where to write the output. Can be the same as dataset_path if you wish (=default).")
+parser.add_argument('--dataset_path', default='/home/sigma/gaze/datasets/gc/', help="Path to extracted files. It should have folders called '%%05d' in it.")
+parser.add_argument('--output_path', default='/home/sigma/gaze/datasets/gc_/', help="Where to write the output. Can be the same as dataset_path if you wish (=default).")
 args = parser.parse_args()
 
-
+device = torch.device("cuda")
+model = MoGeModel.from_pretrained("/home/sigma/moge/moge-2-vitl-normal/model.pt").to(device)
 
 def main():
     if args.output_path is None:
@@ -55,10 +61,15 @@ def main():
         'labelDotXCam': [],
         'labelDotYCam': [],
         'labelFaceGrid': [],
+        'device': [],
+        'depth':[],
+        'landmarks':[],
     }
 
     for i,recording in enumerate(recordings):
         print('[%d/%d] Processing recording %s (%.2f%%)' % (i, len(recordings), recording, i / len(recordings) * 100))
+        # if i>1:
+            # break
         recDir = os.path.join(args.dataset_path, recording)
         recDirOut = os.path.join(args.output_path, recording)
 
@@ -81,16 +92,19 @@ def main():
         frames = readJson(os.path.join(recDir, 'frames.json'))
         if frames is None:
             continue
-        # info = readJson(os.path.join(recDir, 'info.json'))
-        # if info is None:
-        #     continue
+        info = readJson(os.path.join(recDir, 'info.json'))
+        if info is None:
+            continue
         # screen = readJson(os.path.join(recDir, 'screen.json'))
         # if screen is None:
         #     continue
 
-        facePath = preparePath(os.path.join(recDirOut, 'appleFace'))
-        leftEyePath = preparePath(os.path.join(recDirOut, 'appleLeftEye'))
-        rightEyePath = preparePath(os.path.join(recDirOut, 'appleRightEye'))
+        # facePath = preparePath(os.path.join(recDirOut, 'appleFace'))
+        # leftEyePath = preparePath(os.path.join(recDirOut, 'appleLeftEye'))
+        # rightEyePath = preparePath(os.path.join(recDirOut, 'appleRightEye'))
+        # normalPath = preparePath(os.path.join(recDirOut, 'normal'))
+        # depthPath = preparePath(os.path.join(recDirOut, 'depth'))
+        # intrinsicsPath = preparePath(os.path.join(recDirOut, 'intrinsics'))
 
         # Preprocess
         allValid = np.logical_and(np.logical_and(appleFace['IsValid'], appleLeftEye['IsValid']), np.logical_and(appleRightEye['IsValid'], faceGrid['IsValid']))
@@ -124,15 +138,65 @@ def main():
                 continue
             img = np.array(img.convert('RGB'))
 
-            # Crop images
-            imFace = cropImage(img, faceBbox[j,:])
-            imEyeL = cropImage(img, leftEyeBbox[j,:])
-            imEyeR = cropImage(img, rightEyeBbox[j,:])
+            # # Crop images
+            # imFace = cropImage(img, faceBbox[j,:])
+            # imEyeL = cropImage(img, leftEyeBbox[j,:])
+            # imEyeR = cropImage(img, rightEyeBbox[j,:])
 
-            # Save images
-            Image.fromarray(imFace).save(os.path.join(facePath, '%05d.jpg' % frame), quality=95)
-            Image.fromarray(imEyeL).save(os.path.join(leftEyePath, '%05d.jpg' % frame), quality=95)
-            Image.fromarray(imEyeR).save(os.path.join(rightEyePath, '%05d.jpg' % frame), quality=95)
+            # # Save images
+            # Image.fromarray(imFace).save(os.path.join(facePath, '%05d.jpg' % frame), quality=95)
+            # Image.fromarray(imEyeL).save(os.path.join(leftEyePath, '%05d.jpg' % frame), quality=95)
+            # Image.fromarray(imEyeR).save(os.path.join(rightEyePath, '%05d.jpg' % frame), quality=95)
+
+            # =====get geometry=====
+            img_tensor = torch.tensor(img / 255.0, dtype=torch.float32, device=device).permute(2, 0, 1)  # (3, H, W)        
+            output = model.infer(img_tensor)
+
+            # Detach to numpy
+            points = output["points"].detach().cpu().numpy()     # (H, W, 3)
+            depth = output["depth"].detach().cpu().numpy()       # (H, W)
+            mask = output["mask"].detach().cpu().numpy()         # (H, W)
+            # normal = output["normal"].detach().cpu().numpy()     # (H, W, 3)
+            # intrinsics = output["intrinsics"].detach().cpu().numpy() # (3, 3)
+
+            # Crop face region
+            depthFace = cropImage2D(depth, faceBbox[j, :])
+            maskFace = cropImage2D(mask, faceBbox[j, :])
+            # normalFace = cropImage(normal, faceBbox[j, :])
+
+            # Replace infs for safe processing
+            depthFace[np.isinf(depthFace)] = 0
+
+            # Compute mean depth on valid pixels
+            valid_mask = (maskFace > 0) & np.isfinite(depthFace)
+            mean_depth = depthFace[valid_mask].mean() if valid_mask.any() else 0
+
+            # # Normalize depth for visualization
+            # depth_vis = (depthFace - depthFace.min()) / (np.ptp(depthFace) + 1e-8)
+            # depth_vis = (depth_vis * 255).astype(np.uint8)
+            # Image.fromarray(depth_vis).save(os.path.join(depthPath, '%05d.jpg' % frame), quality=95)
+
+            # # Normalize normal for visualization
+            # normal_vis = ((normalFace + 1.0) / 2.0 * 255).clip(0, 255).astype(np.uint8)
+            # Image.fromarray(normal_vis).save(os.path.join(normalPath, '%05d.jpg' % frame), quality=95)
+
+            # # save intrinsics as json
+            # intrinsics_list = intrinsics.tolist()
+            # intrinsics_file = os.path.join(intrinsicsPath, '%05d.json' % frame)
+            # with open(intrinsics_file, 'w') as f:
+            #     json.dump({'intrinsics': intrinsics_list}, f, indent=2)
+
+            # get landmarks
+            landmarks=[]
+            # Face center
+            x, y = get_center(faceBbox[j, :])
+            landmarks.extend(get_point(points, x, y))
+            # Left eye center
+            x, y = get_center(leftEyeBbox[j, :])
+            landmarks.extend(get_point(points, x, y))
+            # Right eye center
+            x, y = get_center(rightEyeBbox[j, :])
+            landmarks.extend(get_point(points, x, y))
 
             # Collect metadata
             meta['labelRecNum'] += [int(recording)]
@@ -140,6 +204,10 @@ def main():
             meta['labelDotXCam'] += [dotInfo['XCam'][j]]
             meta['labelDotYCam'] += [dotInfo['YCam'][j]]
             meta['labelFaceGrid'] += [faceGridBbox[j,:]]
+
+            meta['device']+= [info['DeviceName']]
+            meta['depth']+=[mean_depth]
+            meta['landmarks']+=[landmarks]
 
     
     # Integrate
@@ -151,7 +219,7 @@ def main():
 
     # Load reference metadata
     print('Will compare to the reference GitHub dataset metadata.mat...')
-    reference = sio.loadmat('./reference_metadata.mat', struct_as_record=False) 
+    reference = sio.loadmat('/home/sigma/gaze/gaze/metadata/reference_metadata.mat', struct_as_record=False) 
     reference['labelRecNum'] = reference['labelRecNum'].flatten()
     reference['frameIndex'] = reference['frameIndex'].flatten()
     reference['labelDotXCam'] = reference['labelDotXCam'].flatten()
@@ -161,8 +229,9 @@ def main():
     reference['labelTest'] = reference['labelTest'].flatten()
 
     # Find mapping
-    mKey = np.array(['%05d_%05d' % (rec, frame) for rec, frame in zip(meta['labelRecNum'], meta['frameIndex'])], np.object)
-    rKey = np.array(['%05d_%05d' % (rec, frame) for rec, frame in zip(reference['labelRecNum'], reference['frameIndex'])], np.object)
+    mKey = np.array(['%05d_%05d' % (rec, frame) for rec, frame in zip(meta['labelRecNum'], meta['frameIndex'])], dtype=object)
+    rKey = np.array(['%05d_%05d' % (rec, frame) for rec, frame in zip(reference['labelRecNum'], reference['frameIndex'])], dtype=object)
+
     mIndex = {k: i for i,k in enumerate(mKey)}
     rIndex = {k: i for i,k in enumerate(rKey)}
     mToR = np.zeros((len(mKey,)),int) - 1
@@ -214,7 +283,16 @@ def main():
     #import pdb; pdb.set_trace()
     input("Press Enter to continue...")
 
+def get_center(bbox):
+    x, y, w, h = map(int, bbox)
+    return x + w // 2, y + h // 2
 
+# Safely get a point at (x, y) in image bounds
+def get_point(points, x, y):
+    H, W = points.shape[:2]
+    x = np.clip(x, 0, W - 1)
+    y = np.clip(y, 0, H - 1)
+    return points[y, x]  # note: (row, col)
 
 
 def readJson(filename):
@@ -236,7 +314,7 @@ def readJson(filename):
 
 def preparePath(path, clear = False):
     if not os.path.isdir(path):
-        os.makedirs(path, 0o777)
+        os.makedirs(path, mode=0o777, exist_ok=True)
     if clear:
         files = os.listdir(path)
         for f in files:
@@ -266,6 +344,18 @@ def cropImage(img, bbox):
     res = np.zeros((bbox[3], bbox[2], img.shape[2]), img.dtype)    
     res[aDst[1]:bDst[1],aDst[0]:bDst[0],:] = img[aSrc[1]:bSrc[1],aSrc[0]:bSrc[0],:]
 
+    return res
+
+def cropImage2D(img, bbox):
+    bbox = np.array(bbox, int)
+    aSrc = np.maximum(bbox[:2], 0)
+    bSrc = np.minimum(bbox[:2] + bbox[2:], (img.shape[1], img.shape[0]))
+
+    aDst = aSrc - bbox[:2]
+    bDst = aDst + (bSrc - aSrc)
+
+    res = np.zeros((bbox[3], bbox[2]), img.dtype)
+    res[aDst[1]:bDst[1], aDst[0]:bDst[0]] = img[aSrc[1]:bSrc[1], aSrc[0]:bSrc[0]]
     return res
 
 

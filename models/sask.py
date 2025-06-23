@@ -76,29 +76,31 @@ class NewEyeImageModel(nn.Module):
     # parameters based on SAGE and AFF-Net
     # SAGE: On-device Few-shot Personalization for Real-time Gaze Estimation
     # AFF-Net: Adaptive Feature Fusion Network for Gaze Tracking in Mobile Tablets
-    def __init__(self, is_att=True, att_mode = 'cbam', network_depth=4, is_scale_adaptive=True, n_scales=2):
+    def __init__(self, is_att=True, att_mode = 'cbam', network_depth=4, is_scale_adaptive=True, n_scales=2, M=3, is_shortcut=False):
         super(NewEyeImageModel, self).__init__()
         self.network_depth = network_depth
 
         self.convBlocks = nn.ModuleList([])
         for i in range(network_depth):
             if i==0:
-                self.convBlocks.append(SKUnit(3,32, is_shortcut=True))
+                self.convBlocks.append(SKUnit(3,32*2**i, is_shortcut=is_shortcut, M=M))
             else:
-                self.convBlocks.append(SKUnit(32,32, is_shortcut=True))
+                self.convBlocks.append(SKUnit(32*2**(i-1),32*2**i, is_shortcut=is_shortcut, M=M))
                 
         self.down_sample = nn.MaxPool2d(kernel_size=2, stride=2)
 
         self.is_att = is_att
-        self.att_layer = CBAM(32,reduction_ratio=4)
+        self.att_layers = nn.ModuleList([])
+        for i in range(network_depth):
+            self.att_layers.append(CBAM(32*2**i,reduction_ratio=4))
 
         self.is_scale_adaptive = is_scale_adaptive
         self.n_scales = n_scales # [1, network_depth-1]
         self.featureBlocks = nn.ModuleList([])
-        size = [4]
-        for i in range(self.n_scales):
-            size.append(size[-1]*2)
-            self.featureBlocks.append(nn.Linear(size[-1-1]*size[-1-1]*32, 128))
+        size0 = 8
+        for i in range(network_depth):
+            size = size0*2**(network_depth-1-i)
+            self.featureBlocks.append(nn.Linear(size*size*32*2**i, 128))
 
         self.ss = SS(M=n_scales, ch_in=128, r=8)
         
@@ -115,11 +117,11 @@ class NewEyeImageModel(nn.Module):
             x = self.convBlocks[i](x)
             x = self.down_sample(x)
             if self.is_att:
-                x = self.att_layer(x)
+                x = self.att_layers[i](x)
             # print(x.shape)
             if i >= self.network_depth-self.n_scales:
                 # print(i)
-                fea = self.featureBlocks[(self.network_depth-1-i)](x.view(x.size(0), -1))
+                fea = self.featureBlocks[i](x.view(x.size(0), -1))
                 fea = fea.unsqueeze(dim=-1).unsqueeze(dim=-1)
                 features.append(fea)
         if self.is_scale_adaptive:
@@ -272,8 +274,8 @@ class SASKModel(nn.Module):
 
     def __init__(self):
         super(SASKModel, self).__init__()
-        self.eyeModel = NewEyeImageModel(is_att=True, att_mode = 'cbam', network_depth=4, is_scale_adaptive=True, n_scales=2)
-        self.faceModel = NewEyeImageModel(is_att=True, att_mode = 'cbam', network_depth=6, is_scale_adaptive=True, n_scales=2)
+        self.eyeModel = NewEyeImageModel(is_att=True, att_mode = 'cbam', network_depth=3, is_scale_adaptive=False, n_scales=2)
+        self.faceModel = NewEyeImageModel(is_att=True, att_mode = 'cbam', network_depth=5, is_scale_adaptive=False, n_scales=2)
         self.gridModel = FaceGridModel()
         
         # Joining everything

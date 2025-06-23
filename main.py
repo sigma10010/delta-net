@@ -47,7 +47,7 @@ parser.add_argument('--reset', type=str2bool, nargs='?', const=True, default=Tru
 parser.add_argument('--model_type', type=str, nargs='?', const=True, default='delta', help="support model type [base, delta, sfo, tr, ff, kan, aff].")
 parser.add_argument('--num_calib', type=int, nargs='?', const=True, default=1, help="number of calibration samples.")
 parser.add_argument('--is_best', type=str2bool, nargs='?', const=True, default=True, help="load best or not.")
-parser.add_argument('--is_delta', type=str2bool, nargs='?', const=True, default=True, help="delta model or gaze model.")
+parser.add_argument('--is_delta', type=str2bool, nargs='?', const=True, default=False, help="delta model or gaze model.")
 args = parser.parse_args()
 
 # Change there flags to control what happens.
@@ -57,7 +57,7 @@ isBaseModel = not args.is_delta
 
 workers = 16
 epochs = 25
-batch_size = torch.cuda.device_count()*100 # Change if out of cuda memory, sfo 40, tr 50
+batch_size = torch.cuda.device_count()*50 # Change if out of cuda memory, sfo 40, tr 50
 
 base_lr = 0.0001 #tr 0.0001
 momentum = 0.9
@@ -619,7 +619,7 @@ def testDelta(val_loader, model, epoch, numCalib):
 CHECKPOINTS_PATH = './checkpoints/'
 
 def load_checkpoint(is_best, filename='ckpt.pth.tar', model_type='delta'):
-    filename = model_type +'_SK_'+ filename
+    filename = model_type +'_M3SC0SA0NC2_'+ filename
     # filename = model_type +'_BAM_'+ filename
     # filename = model_type + 'TR_iPad_' + filename
     # filename = model_type +'TR_'+ filename
@@ -641,7 +641,7 @@ def load_checkpoint(is_best, filename='ckpt.pth.tar', model_type='delta'):
 def save_checkpoint(state, is_best, filename='ckpt.pth.tar', model_type='delta'):
     if not os.path.isdir(CHECKPOINTS_PATH):
         os.makedirs(CHECKPOINTS_PATH, 0o777)
-    filename = model_type +'_SK_'+ filename
+    filename = model_type +'_M3SC0SA0NC2_'+ filename
     # filename = model_type +'_BAM_'+ filename
     # filename = model_type + 'TR_iPad_' + filename
     # filename = model_type +'TR_'+ filename
