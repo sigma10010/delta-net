@@ -19,6 +19,7 @@ from models.sfo import SFOModel
 from models.full_face import FullFace, FullFaceDelta
 from models.aff_net import AFFModel, AFFDelta
 from models.sask import SASKModel
+from models.swint import SwinGaze
 from losses import GazeLoss, GazeOriLoss
 
 from collections import OrderedDict
@@ -44,7 +45,7 @@ parser = argparse.ArgumentParser(description='iTracker-pytorch-Trainer.')
 parser.add_argument('--data_path', default='./gc_/', help="Path to processed dataset. It should contain metadata.mat. Use prepareDataset.py.")
 parser.add_argument('--sink', type=str2bool, nargs='?', const=True, default=False, help="Just sink and terminate.")
 parser.add_argument('--reset', type=str2bool, nargs='?', const=True, default=True, help="Start from scratch (do not load).")
-parser.add_argument('--model_type', type=str, nargs='?', const=True, default='delta', help="support model type [base, delta, sfo, tr, ff, kan, aff].")
+parser.add_argument('--model_type', type=str, nargs='?', const=True, default='base', help="support model type [base, delta, sfo, tr, ff, kan, aff].")
 parser.add_argument('--num_calib', type=int, nargs='?', const=True, default=1, help="number of calibration samples.")
 parser.add_argument('--is_best', type=str2bool, nargs='?', const=True, default=True, help="load best or not.")
 parser.add_argument('--is_delta', type=str2bool, nargs='?', const=True, default=False, help="delta model or gaze model.")
@@ -78,7 +79,8 @@ def main():
         # model = BaseTR()
         # model = AFFModel()
         # model = FullFace()
-        model = SASKModel()
+        # model = SASKModel()
+        model = SwinGaze()
     elif args.model_type == 'delta':
         model = DeltaGazeModel()
     elif args.model_type == 'sfo':
@@ -96,7 +98,7 @@ def main():
         return
     model = torch.nn.DataParallel(model)
     model.cuda()
-    imSize=(64,64) # eye size, 224 for tr, 112 for aff, 64 for others
+    imSize=(224,224) # eye size, 224 for tr, 112 for aff, 64 for others
     cudnn.benchmark = True   
 
     epoch = 0

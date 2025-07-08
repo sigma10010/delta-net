@@ -33,7 +33,7 @@ Booktitle = {IEEE Conference on Computer Vision and Pattern Recognition (CVPR)}
 
 parser = argparse.ArgumentParser(description='iTracker-pytorch-PrepareDataset.')
 parser.add_argument('--dataset_path', default='/home/sigma/gaze/datasets/gc/', help="Path to extracted files. It should have folders called '%%05d' in it.")
-parser.add_argument('--output_path', default='/home/sigma/gaze/datasets/gc_/', help="Where to write the output. Can be the same as dataset_path if you wish (=default).")
+parser.add_argument('--output_path', default='/home/sigma/gaze/datasets/gc_mp/', help="Where to write the output. Can be the same as dataset_path if you wish (=default).")
 args = parser.parse_args()
 
 device = torch.device("cuda")
@@ -99,12 +99,12 @@ def main():
         # if screen is None:
         #     continue
 
-        # facePath = preparePath(os.path.join(recDirOut, 'appleFace'))
-        # leftEyePath = preparePath(os.path.join(recDirOut, 'appleLeftEye'))
-        # rightEyePath = preparePath(os.path.join(recDirOut, 'appleRightEye'))
-        # normalPath = preparePath(os.path.join(recDirOut, 'normal'))
-        # depthPath = preparePath(os.path.join(recDirOut, 'depth'))
-        # intrinsicsPath = preparePath(os.path.join(recDirOut, 'intrinsics'))
+        facePath = preparePath(os.path.join(recDirOut, 'appleFace'))
+        leftEyePath = preparePath(os.path.join(recDirOut, 'appleLeftEye'))
+        rightEyePath = preparePath(os.path.join(recDirOut, 'appleRightEye'))
+        normalPath = preparePath(os.path.join(recDirOut, 'normal'))
+        depthPath = preparePath(os.path.join(recDirOut, 'depth'))
+        intrinsicsPath = preparePath(os.path.join(recDirOut, 'intrinsics'))
 
         # Preprocess
         allValid = np.logical_and(np.logical_and(appleFace['IsValid'], appleLeftEye['IsValid']), np.logical_and(appleRightEye['IsValid'], faceGrid['IsValid']))
@@ -113,13 +113,13 @@ def main():
 
         frames = np.array([int(re.match('(\d{5})\.jpg$', x).group(1)) for x in frames])
 
-        bboxFromJson = lambda data: np.stack((data['X'], data['Y'], data['W'],data['H']), axis=1).astype(int)
-        faceBbox = bboxFromJson(appleFace) + [-1,-1,1,1] # for compatibility with matlab code
-        leftEyeBbox = bboxFromJson(appleLeftEye) + [0,-1,0,0]
-        rightEyeBbox = bboxFromJson(appleRightEye) + [0,-1,0,0]
-        leftEyeBbox[:,:2] += faceBbox[:,:2] # relative to face
-        rightEyeBbox[:,:2] += faceBbox[:,:2]
-        faceGridBbox = bboxFromJson(faceGrid)
+        # bboxFromJson = lambda data: np.stack((data['X'], data['Y'], data['W'],data['H']), axis=1).astype(int)
+        # faceBbox = bboxFromJson(appleFace) + [-1,-1,1,1] # for compatibility with matlab code
+        # leftEyeBbox = bboxFromJson(appleLeftEye) + [0,-1,0,0]
+        # rightEyeBbox = bboxFromJson(appleRightEye) + [0,-1,0,0]
+        # leftEyeBbox[:,:2] += faceBbox[:,:2] # relative to face
+        # rightEyeBbox[:,:2] += faceBbox[:,:2]
+        # faceGridBbox = bboxFromJson(faceGrid)
 
 
         for j,frame in enumerate(frames):
@@ -147,6 +147,7 @@ def main():
             # Image.fromarray(imFace).save(os.path.join(facePath, '%05d.jpg' % frame), quality=95)
             # Image.fromarray(imEyeL).save(os.path.join(leftEyePath, '%05d.jpg' % frame), quality=95)
             # Image.fromarray(imEyeR).save(os.path.join(rightEyePath, '%05d.jpg' % frame), quality=95)
+            face_data = extract_and_save_face_data(imgFile)
 
             # =====get geometry=====
             img_tensor = torch.tensor(img / 255.0, dtype=torch.float32, device=device).permute(2, 0, 1)  # (3, H, W)        

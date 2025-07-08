@@ -21,6 +21,7 @@ from models.bam import BAM
 from models.cbam import CBAM
 from models.sk import SKConv, SKUnit
 from models.ss import SS
+from models.safs import SAFS, SAFF, SAFS_X
 
 '''
 Scale-adaptive and selective-kernel (SASK) network.
@@ -76,7 +77,7 @@ class NewEyeImageModel(nn.Module):
     # parameters based on SAGE and AFF-Net
     # SAGE: On-device Few-shot Personalization for Real-time Gaze Estimation
     # AFF-Net: Adaptive Feature Fusion Network for Gaze Tracking in Mobile Tablets
-    def __init__(self, is_att=True, att_mode = 'cbam', network_depth=4, is_scale_adaptive=True, n_scales=2, M=3, is_shortcut=False):
+    def __init__(self, is_att=False, att_mode = 'cbam', network_depth=4, is_scale_adaptive=True, n_scales=2, M=1, is_shortcut=True):
         super(NewEyeImageModel, self).__init__()
         self.network_depth = network_depth
 
@@ -270,17 +271,41 @@ class FaceGridModel(nn.Module):
         x = self.fc(x)
         return x
 
+class DepthModel(nn.Module):
+    # Model for the 3 landmarks and mean depth pathway
+    def __init__(self):
+        super(DepthModel, self).__init__()
+        
+        self.fc = nn.Sequential(
+            nn.Linear(3*3, 128),
+            nn.LeakyReLU(inplace=True),
+            nn.Linear(128, 32),
+            nn.LeakyReLU(inplace=True),
+            )
+        '''
+        self.fc = nn.Sequential(
+            KAN(layers_hidden = [gridSize * gridSize,128,16]),
+            nn.ReLU(inplace=True),
+            )
+        '''
+
+    def forward(self, x):
+        x = x.view(x.size(0), -1)
+        x = self.fc(x)
+        return x
+
 class SASKModel(nn.Module):
 
     def __init__(self):
         super(SASKModel, self).__init__()
-        self.eyeModel = NewEyeImageModel(is_att=True, att_mode = 'cbam', network_depth=3, is_scale_adaptive=False, n_scales=2)
-        self.faceModel = NewEyeImageModel(is_att=True, att_mode = 'cbam', network_depth=5, is_scale_adaptive=False, n_scales=2)
+        self.eyeModel = NewEyeImageModel(network_depth=3)
+        self.faceModel = NewEyeImageModel(network_depth=5)
         self.gridModel = FaceGridModel()
+        self.depthModel = DepthModel()
         
         # Joining everything
         self.fc = nn.Sequential(
-          	nn.Linear(32*4, 128),
+          	nn.Linear(32*5, 128),
             nn.ReLU(inplace=True),
             nn.Linear(128, 2),
             )
@@ -290,6 +315,7 @@ class SASKModel(nn.Module):
         eyesLeft = query[1]
         eyesRight = query[2]
         faceGrids = query[3]
+        landmarks = query[4]
         
         # Eye nets
         xEyeL = self.eyeModel(eyesLeft)
@@ -299,8 +325,10 @@ class SASKModel(nn.Module):
         xFace = self.faceModel(faces)
         xGrid = self.gridModel(faceGrids)
 
+        xLandmark = self.depthModel(landmarks)
+
         # Cat all
-        x = torch.cat((xEyeL, xEyeR, xFace, xGrid), 1)
+        x = torch.cat((xEyeL, xEyeR, xFace, xGrid, xLandmark), 1)
         x = self.fc(x)
         
         return x

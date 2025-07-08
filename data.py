@@ -170,7 +170,7 @@ class ITrackerData(data.Dataset):
         return len(self.indices)
       
 class DeltaGazeData(data.Dataset):
-    def __init__(self, dataPath, split='train', imSize=(128,128), faceSize = (256,256), gridSize=(25, 25), numCalib=1):
+    def __init__(self, dataPath, split='train', imSize=(128,128), faceSize = (224,224), gridSize=(25, 25), numCalib=1):
 
         self.dataPath = dataPath
         self.imSize = imSize
@@ -180,7 +180,8 @@ class DeltaGazeData(data.Dataset):
         self.dataAug = True if split=='train' else False
 
         print('Loading delta dataset...')
-        metaFile = os.path.join(META_PATH, 'metadata_device.mat')
+        # metaFile = os.path.join(META_PATH, 'metadata_device.mat')
+        metaFile = os.path.join(META_PATH, 'metadata_depth.mat')
         # metaFile = os.path.join(META_PATH, 'metadata9.mat') # for sfo
         #metaFile = 'metadata.mat'
         if metaFile is None or not os.path.isfile(metaFile):
@@ -307,12 +308,15 @@ class DeltaGazeData(data.Dataset):
 
         faceGrid = self.makeGrid(self.metadata['labelFaceGrid'][index,:])
 
+        landmark = self.metadata['landmarks'][index,:]
+
         # to tensor
         #row = torch.LongTensor([int(index)])
         faceGrid = torch.FloatTensor(faceGrid)
+        landmark = torch.FloatTensor(landmark)
         gaze = torch.FloatTensor(gaze)
         
-        query = (imFace, imEyeL, imEyeR, faceGrid, gaze)
+        query = (imFace, imEyeL, imEyeR, faceGrid, landmark, gaze)
         
         # sample reference/calibration frame
         
@@ -345,8 +349,11 @@ class DeltaGazeData(data.Dataset):
 
             faceGridCalib = self.makeGrid(self.metadata['labelFaceGrid'][calibIndex,:])
 
+            landmarkCalib = self.metadata['landmarks'][calibIndex,:]
+
             # to tensor
             faceGridCalib = torch.FloatTensor(faceGridCalib)
+            landmarkCalib = torch.FloatTensor(landmarkCalib)
             gazeCalib = torch.FloatTensor(gazeCalib)
             
             ori = self.get_orientation(gaze, gazeCalib)
@@ -355,7 +362,7 @@ class DeltaGazeData(data.Dataset):
             similarity = self.get_similarity(gaze, gazeCalib)
             similarities.append(similarity)
 
-            calib = (imFaceCalib, imEyeLCalib, imEyeRCalib, faceGridCalib, gazeCalib)
+            calib = (imFaceCalib, imEyeLCalib, imEyeRCalib, faceGridCalib, landmarkCalib, gazeCalib)
             calibs.append(calib)
 
             delta = gaze - gazeCalib
