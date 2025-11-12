@@ -5,6 +5,7 @@ import math
 import copy
 from models.resnet import resnet18
 from models.itracker import FaceGridModel
+from models.sask import PointModel
 
 def _get_clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
@@ -77,12 +78,12 @@ class GazeTR(nn.Module):
         num_layers=6
 
         self.base_model = resnet18(pretrained=False, maps=maps)
-        self.gridModel = FaceGridModel()
+        self.gridModel = PointModel()
         
         # Joining everything
         self.featureFC = nn.Sequential(
             #nn.Linear(128+64+128, 128),
-            nn.Linear(32*3+16, 16),
+            nn.Linear(32*4, 16),
             nn.ReLU(inplace=True),
             )
 
@@ -191,12 +192,12 @@ class BaseTR(nn.Module):
         num_layers=6
 
         self.base_model = resnet18(pretrained=False, maps=maps)
-        self.gridModel = FaceGridModel()
+        # self.gridModel = FaceGridModel()
         
         # Joining everything
         self.featureFC = nn.Sequential(
             #nn.Linear(128+64+128, 128),
-            nn.Linear(32*3+16, 16),
+            nn.Linear(32*3, 16),
             nn.ReLU(inplace=True),
             )
 
@@ -258,10 +259,11 @@ class BaseTR(nn.Module):
 
         # Face net
         xFace = self.get_feature(faces)
-        xGrid = self.gridModel(faceGrids)
+        # xGrid = self.gridModel(faceGrids)
 
         # Cat all
-        x = torch.cat((xEyeL, xEyeR, xFace, xGrid), 1)
+        # x = torch.cat((xEyeL, xEyeR, xFace, xGrid), 1)
+        x = torch.cat((xEyeL, xEyeR, xFace), 1)
         #x = torch.cat((xFace, xGrid), 1)
         x_query = self.featureFC(x)
 

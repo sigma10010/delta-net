@@ -11,14 +11,14 @@ import torch.utils.data
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 
-from data import ITrackerData, DeltaGazeData
+from data import ITrackerData, DeltaGazeData, GazeData
 from models.itracker import ITrackerModel
 from models.delta import DeltaGazeModel, KanDeltaModel
 from models.gaze_transformer import GazeTR, BaseTR
 from models.sfo import SFOModel
 from models.full_face import FullFace, FullFaceDelta
 from models.aff_net import AFFModel, AFFDelta
-from models.sask import SASKModel
+from models.sask import SASKModel, SASKDelta
 from models.swint import SwinGaze
 from losses import GazeLoss, GazeOriLoss
 
@@ -42,13 +42,16 @@ def str2bool(v):
         raise argparse.ArgumentTypeError('Boolean value expected.')
 
 parser = argparse.ArgumentParser(description='iTracker-pytorch-Trainer.')
-parser.add_argument('--data_path', default='./gc_/', help="Path to processed dataset. It should contain metadata.mat. Use prepareDataset.py.")
+parser.add_argument('--data_path', default='/home/sigma/gaze/datasets/gc_mp/', help="Path to processed dataset.")
 parser.add_argument('--sink', type=str2bool, nargs='?', const=True, default=False, help="Just sink and terminate.")
 parser.add_argument('--reset', type=str2bool, nargs='?', const=True, default=True, help="Start from scratch (do not load).")
-parser.add_argument('--model_type', type=str, nargs='?', const=True, default='base', help="support model type [base, delta, sfo, tr, ff, kan, aff].")
+parser.add_argument('--model_type', type=str, nargs='?', const=True, default='base', help="support model type [base, delta, sfo, tr, ff, kan, aff, sask].")
 parser.add_argument('--num_calib', type=int, nargs='?', const=True, default=1, help="number of calibration samples.")
 parser.add_argument('--is_best', type=str2bool, nargs='?', const=True, default=True, help="load best or not.")
 parser.add_argument('--is_delta', type=str2bool, nargs='?', const=True, default=False, help="delta model or gaze model.")
+parser.add_argument('--eyeSize', type=int, nargs='?', const=True, default=128, help="eye img size.")
+parser.add_argument('--scales', type=int, nargs='?', const=True, default=1, help="number of scales.")
+parser.add_argument('--kernels', type=int, nargs='?', const=True, default=1, help="number of kernels.")
 args = parser.parse_args()
 
 # Change there flags to control what happens.
@@ -58,7 +61,7 @@ isBaseModel = not args.is_delta
 
 workers = 16
 epochs = 25
-batch_size = torch.cuda.device_count()*50 # Change if out of cuda memory, sfo 40, tr 50
+batch_size = torch.cuda.device_count()*50 # Change if out of cuda memory, sfo, tr 50, others 100
 
 base_lr = 0.0001 #tr 0.0001
 momentum = 0.9
@@ -79,8 +82,8 @@ def main():
         # model = BaseTR()
         # model = AFFModel()
         # model = FullFace()
-        # model = SASKModel()
-        model = SwinGaze()
+        model = SASKModel(args.scales,args.kernels)
+        # model = SwinGaze()
     elif args.model_type == 'delta':
         model = DeltaGazeModel()
     elif args.model_type == 'sfo':
@@ -93,12 +96,14 @@ def main():
         model = KanDeltaModel()
     elif args.model_type == 'aff':
         model = AFFDelta()
+    elif args.model_type == 'sask':
+        model = SASKDelta()
     else:
         print('no support model type!')
         return
     model = torch.nn.DataParallel(model)
     model.cuda()
-    imSize=(224,224) # eye size, 224 for tr, 112 for aff, 64 for others
+    imSize=(args.eyeSize,args.eyeSize) # eye size, 224 for tr, 112 for aff, 128 for sask, 64 for others
     cudnn.benchmark = True   
 
     epoch = 0
@@ -125,9 +130,9 @@ def main():
     if args.model_type == 'base':
         #dataTrain = ITrackerData(dataPath = args.data_path, split='train', imSize = imSize)
         #dataVal = ITrackerData(dataPath = args.data_path, split='test', imSize = imSize)
-        dataTrain = DeltaGazeData(dataPath = args.data_path, split='train', imSize = imSize, numCalib = args.num_calib)
-        dataVal = DeltaGazeData(dataPath = args.data_path, split='test', imSize = imSize, numCalib = args.num_calib)
-    elif args.model_type in ['delta', 'sfo', 'tr', 'ff', 'kan', 'aff']:
+        dataTrain = GazeData(dataPath = args.data_path, split='train', imSize = imSize)
+        dataVal = GazeData(dataPath = args.data_path, split='test', imSize = imSize)
+    elif args.model_type in ['delta', 'sfo', 'tr', 'ff', 'kan', 'aff', 'sask']:
         dataTrain = DeltaGazeData(dataPath = args.data_path, split='train', imSize = imSize, numCalib = args.num_calib)
         dataVal = DeltaGazeData(dataPath = args.data_path, split='test', imSize = imSize, numCalib = args.num_calib)
     else:
@@ -157,7 +162,7 @@ def main():
     if doTest and isBaseModel:
         validate(val_loader, model, criterion, epoch)
         return
-    elif doTest and args.model_type in ['delta', 'tr', 'ff', 'kan', 'aff']:
+    elif doTest and args.model_type in ['delta', 'tr', 'ff', 'kan', 'aff', 'sask']:
         #validateDelta(val_loader, model, criterion, epoch)
         testDelta(val_loader, model, epoch, numCalib=args.num_calib)
         return
@@ -176,7 +181,7 @@ def main():
         if isBaseModel:
             train(train_loader, model, criterion, optimizer, epoch)
             prec1 = validate(val_loader, model, criterion, epoch)
-        elif args.model_type in ['delta', 'tr', 'ff', 'kan', 'aff']:
+        elif args.model_type in ['delta', 'tr', 'ff', 'kan', 'aff', 'sask']:
             trainDelta(train_loader, model, criterion, optimizer, epoch)
             prec1 = validateDelta(val_loader, model, criterion, epoch)
         elif args.model_type == 'sfo':
@@ -446,8 +451,8 @@ def trainDelta(train_loader, model, criterion,optimizer, epoch):
         # compute output
         output = model(query, calib)
 
-        loss_dict = criterion(output['gaze'], gaze_gt)
-        # loss_dict = criterion(output['delta'], delta)
+        # loss_dict = criterion(output['gaze'], gaze_gt)
+        loss_dict = criterion(output['delta'], delta)
         loss = loss_dict
 
         # loss_dict = criterion(output['delta'], delta, output['ori'], ori)
@@ -521,8 +526,8 @@ def validateDelta(val_loader, model, criterion, epoch):
         with torch.no_grad():
             output  = model(query, calib)
 
-        loss_dict = criterion(output['gaze'], gaze_gt)
-        # loss_dict = criterion(output['delta'], delta)
+        # loss_dict = criterion(output['gaze'], gaze_gt)
+        loss_dict = criterion(output['delta'], delta)
         loss = loss_dict
 
         # loss_dict = criterion(output['delta'], delta, output['ori'], ori)
@@ -531,8 +536,8 @@ def validateDelta(val_loader, model, criterion, epoch):
         # loss_dict = criterion(output['delta'], delta, output['x_query'], output['x_calib'], similarity)
         # loss = loss_dict['overall']
         
-        lossLin = output['gaze'] - gaze_gt
-        # lossLin = output['delta'] - delta
+        # lossLin = output['gaze'] - gaze_gt
+        lossLin = output['delta'] - delta
         lossLin = torch.mul(lossLin,lossLin)
         lossLin = torch.sum(lossLin,1)
         lossLin = torch.mean(torch.sqrt(lossLin))
@@ -616,12 +621,24 @@ def testDelta(val_loader, model, epoch, numCalib):
                     epoch, i, len(val_loader), batch_time=batch_time,
                     lossLin=lossesLin))
 
+    # write mean error to csv
+    data = {'model_type':args.model_type,'num_calib':args.num_calib, 'mean_error': lossesLin.avg}
+    df = pd.DataFrame([data])
+    output_file = './outputs/output_mean_error.csv'
+    if os.path.exists(output_file):
+        df.to_csv(output_file, mode='a', header=False, index=False)
+    else:
+        df.to_csv(output_file, mode='w', header=True, index=False)
+    
+
     return lossesLin.avg
 
 CHECKPOINTS_PATH = './checkpoints/'
 
 def load_checkpoint(is_best, filename='ckpt.pth.tar', model_type='delta'):
-    filename = model_type +'_M3SC0SA0NC2_'+ filename
+    # model_type = model_type+str(args.num_calib)
+    # filename = model_type +'_scale%d_'%args.scales + filename
+    filename = model_type +'_wo_scale%dkernel%d_'%(args.scales,args.kernels) + filename
     # filename = model_type +'_BAM_'+ filename
     # filename = model_type + 'TR_iPad_' + filename
     # filename = model_type +'TR_'+ filename
@@ -643,7 +660,8 @@ def load_checkpoint(is_best, filename='ckpt.pth.tar', model_type='delta'):
 def save_checkpoint(state, is_best, filename='ckpt.pth.tar', model_type='delta'):
     if not os.path.isdir(CHECKPOINTS_PATH):
         os.makedirs(CHECKPOINTS_PATH, 0o777)
-    filename = model_type +'_M3SC0SA0NC2_'+ filename
+    # model_type = model_type+str(args.num_calib)
+    filename = model_type +'_wo_scale%dkernel%d_'%(args.scales,args.kernels) + filename
     # filename = model_type +'_BAM_'+ filename
     # filename = model_type + 'TR_iPad_' + filename
     # filename = model_type +'TR_'+ filename

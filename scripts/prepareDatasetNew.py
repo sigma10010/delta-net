@@ -6,7 +6,7 @@ from PIL import Image
 import cv2
 import torch
 # from moge.model.v1 import MoGeModel
-from moge.model.v2 import MoGeModel # Let's try MoGe-2
+# from moge.model.v2 import MoGeModel # Let's try MoGe-2
 
 from face_det import extract_and_save_face_data
 
@@ -40,7 +40,7 @@ parser.add_argument('--output_path', default='/home/sigma/gaze/datasets/gc_mp/',
 args = parser.parse_args()
 
 device = torch.device("cuda")
-model = MoGeModel.from_pretrained("/home/sigma/moge/moge-2-vitl-normal/model.pt").to(device)
+# model = MoGeModel.from_pretrained("/home/sigma/moge/moge-2-vitl-normal/model.pt").to(device)
 
 def main():
     if args.output_path is None:
@@ -63,16 +63,30 @@ def main():
         'frameIndex': [],
         'labelDotXCam': [],
         'labelDotYCam': [],
-        'labelFaceGrid': [],
+        # 'labelFaceGrid': [],
         'device': [],
         'depth':[],
         # 'landmarks':[],
         'rects': []
     }
 
+    # # --- 1. Load from .mat ---
+    # meta = sio.loadmat('/home/sigma/gaze/datasets/gc_mp/metadata_850.mat', struct_as_record=False) 
+    # if 'labelFaceGrid' in meta:
+    #     del meta['labelFaceGrid']
+    # # --- 2. Convert relevant fields for appending (only those you will update) ---
+    # for key in ['labelRecNum', 'frameIndex', 'labelDotXCam', 'labelDotYCam',
+    #             'labelFaceGrid', 'device', 'depth', 'rects']:
+    #     if key in meta and isinstance(meta[key], np.ndarray):
+    #         if key == 'labelFaceGrid' or key == 'rects':
+    #             # For 2D arrays, use list of arrays for efficient appending
+    #             meta[key] = [meta[key][i] for i in range(meta[key].shape[0])]
+    #         else:
+    #             meta[key] = meta[key].flatten().tolist()
+
     for i,recording in enumerate(recordings):
-        # if i<769:
-        #     continue
+        if i<1421:
+            continue
         print('[%d/%d] Processing recording %s (%.2f%%)' % (i, len(recordings), recording, i / len(recordings) * 100))
         # if i>1:
             # break
@@ -129,6 +143,7 @@ def main():
 
 
         for j,frame in enumerate(frames):
+            # print(j, len(frames))
             # Can we use it?
             # if not allValid[j]:
             #     continue
@@ -164,7 +179,7 @@ def main():
             x1, y1, x2, y2 = face_rect
             faceBbox = [x1, y1, x2 - x1, y2 - y1]
 
-            faceGrid = make_face_grid(face_rect, (w, h))  # 注意 img_size 是 (w, h)
+            # faceGrid = make_face_grid(face_rect, (w, h))  # 注意 img_size 是 (w, h)
 
             left_eye_rect = face_data['left_eye_rect']
             x1, y1, x2, y2 = left_eye_rect
@@ -236,19 +251,28 @@ def main():
             '''
 
             # Collect metadata
-            meta['labelRecNum'] += [int(recording)]
-            meta['frameIndex'] += [frame]
-            meta['labelDotXCam'] += [dotInfo['XCam'][j]]
-            meta['labelDotYCam'] += [dotInfo['YCam'][j]]
-            meta['labelFaceGrid'] += [faceGrid]
+            # meta['labelRecNum'] += [int(recording)]
+            # meta['frameIndex'] += [frame]
+            # meta['labelDotXCam'] += [dotInfo['XCam'][j]]
+            # meta['labelDotYCam'] += [dotInfo['YCam'][j]]
+            # meta['labelFaceGrid'] += [faceGrid]
 
-            meta['device']+= [info['DeviceName']]
-            meta['depth']+=[mean_depth]
-            # meta['landmarks']+=[landmarks]
-            meta['rects']+=[rects]
+            # meta['device']+= [info['DeviceName']]
+            # meta['depth']+=[mean_depth]
+            # # meta['landmarks']+=[landmarks]
+            # meta['rects']+=[rects]
+
+            meta['labelRecNum'].append(int(recording))
+            meta['frameIndex'].append(frame)
+            meta['labelDotXCam'].append(dotInfo['XCam'][j])
+            meta['labelDotYCam'].append(dotInfo['YCam'][j])
+            # meta['labelFaceGrid'].append(faceGrid)
+            meta['device'].append(info['DeviceName'])
+            meta['depth'].append(mean_depth)
+            meta['rects'].append(rects)
 
         # save meta
-        if i%50==0:
+        if i % 20 == 0 or i == len(recordings) - 1:
             metaFile = os.path.join(args.output_path, 'metadata.mat')
             # print('Writing out the metadata.mat to %s...' % metaFile)
             sio.savemat(metaFile, meta)

@@ -7,7 +7,8 @@ import torchvision.transforms as transforms
 import torch
 import numpy as np
 import re
-
+import json
+import cv2
 import random
 
 '''
@@ -170,18 +171,316 @@ class ITrackerData(data.Dataset):
         return len(self.indices)
       
 class DeltaGazeData(data.Dataset):
-    def __init__(self, dataPath, split='train', imSize=(128,128), faceSize = (224,224), gridSize=(25, 25), numCalib=1):
+    def __init__(self, dataPath, split='train', imSize=(128,128), faceSize = (256,256), gridSize=(25, 25), numCalib=1):
 
         self.dataPath = dataPath
         self.imSize = imSize
-        self.faceSize = faceSize
+        self.faceSize = faceSize # 224 for orthers, 256 for sask
         self.gridSize = gridSize
         self.numCalib = numCalib
         self.dataAug = True if split=='train' else False
 
         print('Loading delta dataset...')
         # metaFile = os.path.join(META_PATH, 'metadata_device.mat')
-        metaFile = os.path.join(META_PATH, 'metadata_depth.mat')
+        # metaFile = os.path.join(META_PATH, 'metadata1.mat')
+        metaFile = os.path.join(META_PATH, 'metadata9.mat') # for sfo
+        #metaFile = 'metadata.mat'
+        if metaFile is None or not os.path.isfile(metaFile):
+            raise RuntimeError('There is no such file %s! Provide a valid dataset path.' % metaFile)
+        self.metadata = loadMetadata(metaFile)
+        if self.metadata is None:
+            raise RuntimeError('Could not read metadata file %s! Provide a valid dataset path.' % metaFile)
+
+        self.faceMean = loadMetadata(os.path.join(MEAN_PATH, 'mean_face_224.mat'))['image_mean']
+        self.eyeLeftMean = loadMetadata(os.path.join(MEAN_PATH, 'mean_left_224.mat'))['image_mean']
+        self.eyeRightMean = loadMetadata(os.path.join(MEAN_PATH, 'mean_right_224.mat'))['image_mean']
+        
+        self.transformFace = transforms.Compose([
+            transforms.Resize(self.faceSize),
+            transforms.ToTensor(),
+            SubtractMean(meanImg=self.faceMean, imSize = self.faceSize),
+        ])
+        self.transformEyeL = transforms.Compose([
+            transforms.Resize(self.imSize),
+            transforms.ToTensor(),
+            SubtractMean(meanImg=self.eyeLeftMean, imSize = self.imSize),
+        ])
+        self.transformEyeR = transforms.Compose([
+            transforms.Resize(self.imSize),
+            transforms.ToTensor(),
+            SubtractMean(meanImg=self.eyeRightMean, imSize = self.imSize),
+            transforms.RandomHorizontalFlip(p=1.0)
+        ])
+
+        if split == 'test':
+            mask = self.metadata['labelTest']
+            
+            mask_iphone = [self.metadata['device'][i].startswith("iPhone") for i in range(len(self.metadata['device']))] # iPhone/iPad
+            mask_iphone = np.array(mask_iphone)
+            mask = mask * mask_iphone # test on iphone only
+            
+        elif split == 'val':
+            mask = self.metadata['labelVal']
+        else:
+            mask = self.metadata['labelTrain']
+            
+            # mask_val = self.metadata['labelVal']
+            # mask += mask_val
+
+            mask_iphone = [self.metadata['device'][i].startswith("iPhone") for i in range(len(self.metadata['device']))]
+            mask_iphone = np.array(mask_iphone)
+            mask = mask * mask_iphone # train on iphone only
+            
+        self.indices = np.argwhere(mask)[:,0]
+        print('Loaded delta dataset split "%s" with %d records...' % (split, len(self.indices)))
+
+    def loadImage(self, path, aug):
+        im = cv2.imread(path)
+        if im is None:
+            raise RuntimeError('Could not read image: ' + path)
+        im = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)
+        # Convert to PIL Image
+        im = Image.fromarray(im)
+
+        w, h = im.size   # 注意：PIL 是 (width, height)
+        if aug:
+            # bounding boxes aug
+            random_number = random.randint(2, 10)
+            crop_size = int(min(h, w) * (1 - random_number / 100.0))  # 防止超界
+            if crop_size > 0:
+                centerCrop = transforms.CenterCrop(crop_size)
+                im = centerCrop(im)
+
+            colorJitter = transforms.ColorJitter(0.2, 0.2, 0.1, 0.0)
+            im = colorJitter(im)
+
+        return im
+
+
+    def makeGrid(self, params):
+        gridLen = self.gridSize[0] * self.gridSize[1]
+        grid = np.zeros([gridLen,], np.float32)
+        
+        indsY = np.array([i // self.gridSize[0] for i in range(gridLen)])
+        indsX = np.array([i % self.gridSize[0] for i in range(gridLen)])
+        condX = np.logical_and(indsX >= params[0], indsX < params[0] + params[2]) 
+        condY = np.logical_and(indsY >= params[1], indsY < params[1] + params[3]) 
+        cond = np.logical_and(condX, condY)
+
+        grid[cond] = 1
+        return grid
+    
+    def get_similarity(self, gaze_query, gaze_calib, threshold = 1.0):
+        dist = gaze_query - gaze_calib
+        dist = torch.mul(dist,dist)
+        dist = torch.sum(dist)
+        dist = torch.mean(torch.sqrt(dist))
+        similarity = 1 if dist<threshold else 0
+        return similarity
+    
+    def get_orientation(self, gaze_query, gaze_calib):
+        delta_x = gaze_query[0]-gaze_calib[0]
+        delta_y = gaze_query[1]-gaze_calib[1]
+        if delta_x>0 and delta_y>=0:
+            ori = 0
+        elif delta_x<=0 and delta_y>0:
+            ori = 1
+        elif delta_x<0 and delta_y<=0:
+            ori = 2
+        elif delta_x>=0 and delta_y<0:
+            ori = 3
+        else:
+            ori = 0 #(0,0)
+        return ori
+
+    def make_face_grid(self, face_rect, img_size, grid_size=(25, 25)):
+        """
+        face_rect: [x1, y1, x2, y2]，人脸在图像中的像素坐标
+        img_size: (width, height) 图像大小
+        grid_size: (grid_w, grid_h) 网格大小
+
+        返回：
+            numpy array (grid_h, grid_w)，
+            人脸区域置1，其余0
+        """
+        img_w, img_h = img_size
+        grid_w, grid_h = grid_size
+
+        x1, y1, x2, y2 = face_rect
+
+        # 计算人脸框宽高
+        w = x2 - x1
+        h = y2 - y1
+
+        # 映射到网格坐标，注意用float计算，最后用int裁剪索引
+        gx = int(x1 / img_w * grid_w)
+        gy = int(y1 / img_h * grid_h)
+        gw = max(int(w / img_w * grid_w), 1)
+        gh = max(int(h / img_h * grid_h), 1)
+
+        # 确保范围合法
+        gx = np.clip(gx, 0, grid_w-1)
+        gy = np.clip(gy, 0, grid_h-1)
+        if gx + gw > grid_w:
+            gw = grid_w - gx
+        if gy + gh > grid_h:
+            gh = grid_h - gy
+
+        grid = np.zeros((grid_h, grid_w), dtype=np.uint8)
+        grid[gy:gy+gh, gx:gx+gw] = 1
+
+        return grid.flatten()
+
+    def __getitem__(self, index):
+        index = self.indices[index]
+        recNum = self.metadata['labelRecNum'][index]
+
+        # get image size
+        recDir = os.path.join('/home/sigma/gaze/datasets/gc/','%05d'%recNum)
+        imgFile = os.path.join(recDir, 'frames', '%05d.jpg' % self.metadata['frameIndex'][index])
+        img = cv2.imread(imgFile)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        h, w = img.shape[:2]
+        
+        # get face detection data
+        faceDataPath = os.path.join(self.dataPath, '%05d/face_data/%05d.json' % (recNum, self.metadata['frameIndex'][index])) 
+        face_data = {}
+        with open(faceDataPath, "r") as f:
+            face_data = json.load(f)
+        # face_rect = face_data['face_rect']
+        face_keypoints = face_data['face_keypoints']
+        # nose tip 1, left eye 33, right eye 263, left mouse 61, right mouse 291, chin bottom 199
+        pnp_ids = [1, 33, 263, 61, 291, 199]
+        pnp_points = []
+        for point_id in pnp_ids:
+            pnp_points.append(face_keypoints[point_id]['x']/w)
+            pnp_points.append(face_keypoints[point_id]['y']/h)
+            pnp_points.append(face_keypoints[point_id]['z'])
+        pnp_points = np.array(pnp_points)
+
+        # get face grid
+        # faceGrid = self.makeGrid(self.metadata['labelFaceGrid'][index,:])
+        # faceGrid = self.make_face_grid(face_rect, (w, h))
+
+        imFacePath = os.path.join(self.dataPath, '%05d/appleFace/%05d.jpg' % (recNum, self.metadata['frameIndex'][index]))
+        imEyeLPath = os.path.join(self.dataPath, '%05d/appleLeftEye/%05d.jpg' % (recNum, self.metadata['frameIndex'][index]))
+        imEyeRPath = os.path.join(self.dataPath, '%05d/appleRightEye/%05d.jpg' % (recNum, self.metadata['frameIndex'][index]))
+
+        imFace = self.loadImage(imFacePath, aug = self.dataAug)
+        imEyeL = self.loadImage(imEyeLPath, aug = self.dataAug)
+        imEyeR = self.loadImage(imEyeRPath, aug = self.dataAug)
+
+        imFace = self.transformFace(imFace)
+        imEyeL = self.transformEyeL(imEyeL)
+        imEyeR = self.transformEyeR(imEyeR)
+
+        gaze = np.array([self.metadata['labelDotXCam'][index], self.metadata['labelDotYCam'][index]], np.float32)
+
+        # rects = self.metadata['rects'][index,:]
+
+        # to tensor
+        #row = torch.LongTensor([int(index)])
+        # faceGrid = torch.FloatTensor(faceGrid)
+        # rects = torch.FloatTensor(rects)
+        pnp_points = torch.FloatTensor(pnp_points)
+        gaze = torch.FloatTensor(gaze)
+        
+        query = (imFace, imEyeL, imEyeR, pnp_points, gaze)
+        
+        # sample reference/calibration frame
+        
+        calibMask = self.metadata['labelRecNum']==recNum
+        calibIndices = np.argwhere(calibMask)[:,0]
+        calibIndices = np.delete(calibIndices, np.where(calibIndices == index))
+        try:
+            calibSelectedIndices = np.random.choice(calibIndices, size = self.numCalib, replace = False)
+        except:
+            print('number for calib of recNum %d is less than %d'%(recNum, self.numCalib))
+            return
+        calibs = []
+        deltas = []
+        oris = []
+        similarities = []
+        for calibIndex in calibSelectedIndices:
+            # get image size
+            recDir = os.path.join('/home/sigma/gaze/datasets/gc/','%05d'%recNum)
+            imgFile = os.path.join(recDir, 'frames', '%05d.jpg' % self.metadata['frameIndex'][calibIndex])
+            img = cv2.imread(imgFile)
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            h, w = img.shape[:2]
+            
+            # get face detection data
+            faceDataPath = os.path.join(self.dataPath, '%05d/face_data/%05d.json' % (recNum, self.metadata['frameIndex'][calibIndex])) 
+            face_data = {}
+            with open(faceDataPath, "r") as f:
+                face_data = json.load(f)
+            # face_rect = face_data['face_rect']
+            face_keypoints = face_data['face_keypoints']
+            # nose tip 1, left eye 33, right eye 263, left mouse 61, right mouse 291, chin bottom 199
+            pnp_ids = [1, 33, 263, 61, 291, 199]
+            calib_points = []
+            for point_id in pnp_ids:
+                calib_points.append(face_keypoints[point_id]['x']/w)
+                calib_points.append(face_keypoints[point_id]['y']/h)
+                calib_points.append(face_keypoints[point_id]['z'])
+            calib_points = np.array(calib_points)
+
+            # get face grid
+            # faceGrid = self.makeGrid(self.metadata['labelFaceGrid'][calibIndex,:])
+            # faceGrid = self.make_face_grid(face_rect, (w, h))
+
+            imFacePath = os.path.join(self.dataPath, '%05d/appleFace/%05d.jpg' % (recNum, self.metadata['frameIndex'][calibIndex]))
+            imEyeLPath = os.path.join(self.dataPath, '%05d/appleLeftEye/%05d.jpg' % (recNum, self.metadata['frameIndex'][calibIndex]))
+            imEyeRPath = os.path.join(self.dataPath, '%05d/appleRightEye/%05d.jpg' % (recNum, self.metadata['frameIndex'][calibIndex]))
+
+            imFaceCalib = self.loadImage(imFacePath, aug = self.dataAug)
+            imEyeLCalib = self.loadImage(imEyeLPath, aug = self.dataAug)
+            imEyeRCalib = self.loadImage(imEyeRPath, aug = self.dataAug)
+
+            imFaceCalib = self.transformFace(imFaceCalib)
+            imEyeLCalib = self.transformEyeL(imEyeLCalib)
+            imEyeRCalib = self.transformEyeR(imEyeRCalib)
+
+            gazeCalib = np.array([self.metadata['labelDotXCam'][calibIndex], self.metadata['labelDotYCam'][calibIndex]], np.float32)
+
+            # rectsCalib = self.metadata['rects'][calibIndex,:]
+
+            # to tensor
+            # faceGridCalib = torch.FloatTensor(faceGridCalib)
+            # rectsCalib = torch.FloatTensor(rectsCalib)
+            calib_points = torch.FloatTensor(calib_points)
+            gazeCalib = torch.FloatTensor(gazeCalib)
+            
+            ori = self.get_orientation(gaze, gazeCalib)
+            oris.append(ori)
+
+            similarity = self.get_similarity(gaze, gazeCalib)
+            similarities.append(similarity)
+
+            calib = (imFaceCalib, imEyeLCalib, imEyeRCalib, calib_points, gazeCalib)
+            calibs.append(calib)
+
+            delta = gaze - gazeCalib
+            deltas.append(delta)
+
+        return {'query':query, 'calibs':calibs, 'deltas':deltas, 'oris':oris, 'similarities':similarities, 'recNum': recNum}
+    
+        
+    def __len__(self):
+        return len(self.indices)
+
+class GazeData(data.Dataset):
+    def __init__(self, dataPath, split='train', imSize=(128,128), faceSize = (256,256), gridSize=(25, 25)):
+
+        self.dataPath = dataPath
+        self.imSize = imSize
+        self.faceSize = faceSize # 256 for sask 224 for others
+        self.gridSize = gridSize
+        self.dataAug = True if split=='train' else False
+
+        print('Loading delta dataset...')
+        # metaFile = os.path.join(META_PATH, 'metadata_device.mat')
+        metaFile = os.path.join(META_PATH, 'metadata_mp.mat')
         # metaFile = os.path.join(META_PATH, 'metadata9.mat') # for sfo
         #metaFile = 'metadata.mat'
         if metaFile is None or not os.path.isfile(metaFile):
@@ -234,14 +533,15 @@ class DeltaGazeData(data.Dataset):
         print('Loaded delta dataset split "%s" with %d records...' % (split, len(self.indices)))
 
     def loadImage(self, path, aug):
-        try:
-            im = Image.open(path).convert('RGB')
-        except OSError:
+        im = cv2.imread(path)
+        if im is None:
             raise RuntimeError('Could not read image: ' + path)
-            #im = Image.new("RGB", self.imSize, "white")
+        im = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)
+        # Convert to PIL Image
+        im = Image.fromarray(im)
         if aug:
             #bounding boxes aug
-            h,w =im.size
+            h, w = im.size
             random_number = random.randint(2, 10)
             crop_size = int(h*(1-random_number/100.0))
             centerCrop = transforms.CenterCrop(crop_size)
@@ -249,48 +549,78 @@ class DeltaGazeData(data.Dataset):
             
             colorJitter = transforms.ColorJitter(0.2,0.2,0.1,0.0)
             im = colorJitter(im)
+
         return im
 
+    def make_face_grid(self, face_rect, img_size, grid_size=(25, 25)):
+        """
+        face_rect: [x1, y1, x2, y2]，人脸在图像中的像素坐标
+        img_size: (width, height) 图像大小
+        grid_size: (grid_w, grid_h) 网格大小
 
-    def makeGrid(self, params):
-        gridLen = self.gridSize[0] * self.gridSize[1]
-        grid = np.zeros([gridLen,], np.float32)
-        
-        indsY = np.array([i // self.gridSize[0] for i in range(gridLen)])
-        indsX = np.array([i % self.gridSize[0] for i in range(gridLen)])
-        condX = np.logical_and(indsX >= params[0], indsX < params[0] + params[2]) 
-        condY = np.logical_and(indsY >= params[1], indsY < params[1] + params[3]) 
-        cond = np.logical_and(condX, condY)
+        返回：
+            numpy array (grid_h, grid_w)，
+            人脸区域置1，其余0
+        """
+        img_w, img_h = img_size
+        grid_w, grid_h = grid_size
 
-        grid[cond] = 1
-        return grid
-    
-    def get_similarity(self, gaze_query, gaze_calib, threshold = 1.0):
-        dist = gaze_query - gaze_calib
-        dist = torch.mul(dist,dist)
-        dist = torch.sum(dist)
-        dist = torch.mean(torch.sqrt(dist))
-        similarity = 1 if dist<threshold else 0
-        return similarity
-    
-    def get_orientation(self, gaze_query, gaze_calib):
-        delta_x = gaze_query[0]-gaze_calib[0]
-        delta_y = gaze_query[1]-gaze_calib[1]
-        if delta_x>0 and delta_y>=0:
-            ori = 0
-        elif delta_x<=0 and delta_y>0:
-            ori = 1
-        elif delta_x<0 and delta_y<=0:
-            ori = 2
-        elif delta_x>=0 and delta_y<0:
-            ori = 3
-        else:
-            ori = 0 #(0,0)
-        return ori
+        x1, y1, x2, y2 = face_rect
+
+        # 计算人脸框宽高
+        w = x2 - x1
+        h = y2 - y1
+
+        # 映射到网格坐标，注意用float计算，最后用int裁剪索引
+        gx = int(x1 / img_w * grid_w)
+        gy = int(y1 / img_h * grid_h)
+        gw = max(int(w / img_w * grid_w), 1)
+        gh = max(int(h / img_h * grid_h), 1)
+
+        # 确保范围合法
+        gx = np.clip(gx, 0, grid_w-1)
+        gy = np.clip(gy, 0, grid_h-1)
+        if gx + gw > grid_w:
+            gw = grid_w - gx
+        if gy + gh > grid_h:
+            gh = grid_h - gy
+
+        grid = np.zeros((grid_h, grid_w), dtype=np.uint8)
+        grid[gy:gy+gh, gx:gx+gw] = 1
+
+        return grid.flatten()
 
     def __getitem__(self, index):
         index = self.indices[index]
         recNum = self.metadata['labelRecNum'][index]
+
+        # get image size
+        recDir = os.path.join('/home/sigma/gaze/datasets/gc/','%05d'%recNum)
+        imgFile = os.path.join(recDir, 'frames', '%05d.jpg' % self.metadata['frameIndex'][index])
+        img = cv2.imread(imgFile)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        h, w = img.shape[:2]
+        
+        # get face detection data
+        faceDataPath = os.path.join(self.dataPath, '%05d/face_data/%05d.json' % (recNum, self.metadata['frameIndex'][index])) 
+        face_data = {}
+        with open(faceDataPath, "r") as f:
+            face_data = json.load(f)
+        # face_rect = face_data['face_rect']
+        face_keypoints = face_data['face_keypoints']
+        # nose tip 1, left eye 33, right eye 263, left mouse 61, right mouse 291, chin bottom 199
+        pnp_ids = [1, 33, 263, 61, 291, 199]
+        pnp_points = []
+        for point_id in pnp_ids:
+            pnp_points.append(face_keypoints[point_id]['x']/w)
+            pnp_points.append(face_keypoints[point_id]['y']/h)
+            pnp_points.append(face_keypoints[point_id]['z'])
+        pnp_points = np.array(pnp_points)
+
+        # get face grid
+        # faceGrid = self.makeGrid(self.metadata['labelFaceGrid'][index,:])
+        # faceGrid = self.make_face_grid(face_rect, (w, h))
+        
 
         imFacePath = os.path.join(self.dataPath, '%05d/appleFace/%05d.jpg' % (recNum, self.metadata['frameIndex'][index]))
         imEyeLPath = os.path.join(self.dataPath, '%05d/appleLeftEye/%05d.jpg' % (recNum, self.metadata['frameIndex'][index]))
@@ -306,69 +636,18 @@ class DeltaGazeData(data.Dataset):
 
         gaze = np.array([self.metadata['labelDotXCam'][index], self.metadata['labelDotYCam'][index]], np.float32)
 
-        faceGrid = self.makeGrid(self.metadata['labelFaceGrid'][index,:])
-
-        landmark = self.metadata['landmarks'][index,:]
+        rects = self.metadata['rects'][index,:]
 
         # to tensor
         #row = torch.LongTensor([int(index)])
-        faceGrid = torch.FloatTensor(faceGrid)
-        landmark = torch.FloatTensor(landmark)
+        # faceGrid = torch.FloatTensor(faceGrid)
+        rects = torch.FloatTensor(rects)
+        pnp_points = torch.FloatTensor(pnp_points)
         gaze = torch.FloatTensor(gaze)
         
-        query = (imFace, imEyeL, imEyeR, faceGrid, landmark, gaze)
-        
-        # sample reference/calibration frame
-        
-        calibMask = self.metadata['labelRecNum']==recNum
-        calibIndices = np.argwhere(calibMask)[:,0]
-        calibIndices = np.delete(calibIndices, np.where(calibIndices == index))
-        try:
-            calibSelectedIndices = np.random.choice(calibIndices, size = self.numCalib, replace = False)
-        except:
-            print('number for calib of recNum %d is less than %d'%(recNum, self.numCalib))
-            return
-        calibs = []
-        deltas = []
-        oris = []
-        similarities = []
-        for calibIndex in calibSelectedIndices:
-            imFacePath = os.path.join(self.dataPath, '%05d/appleFace/%05d.jpg' % (recNum, self.metadata['frameIndex'][calibIndex]))
-            imEyeLPath = os.path.join(self.dataPath, '%05d/appleLeftEye/%05d.jpg' % (recNum, self.metadata['frameIndex'][calibIndex]))
-            imEyeRPath = os.path.join(self.dataPath, '%05d/appleRightEye/%05d.jpg' % (recNum, self.metadata['frameIndex'][calibIndex]))
+        query = (imFace, imEyeL, imEyeR, pnp_points, gaze)
 
-            imFaceCalib = self.loadImage(imFacePath, aug = self.dataAug)
-            imEyeLCalib = self.loadImage(imEyeLPath, aug = self.dataAug)
-            imEyeRCalib = self.loadImage(imEyeRPath, aug = self.dataAug)
-
-            imFaceCalib = self.transformFace(imFaceCalib)
-            imEyeLCalib = self.transformEyeL(imEyeLCalib)
-            imEyeRCalib = self.transformEyeR(imEyeRCalib)
-
-            gazeCalib = np.array([self.metadata['labelDotXCam'][calibIndex], self.metadata['labelDotYCam'][calibIndex]], np.float32)
-
-            faceGridCalib = self.makeGrid(self.metadata['labelFaceGrid'][calibIndex,:])
-
-            landmarkCalib = self.metadata['landmarks'][calibIndex,:]
-
-            # to tensor
-            faceGridCalib = torch.FloatTensor(faceGridCalib)
-            landmarkCalib = torch.FloatTensor(landmarkCalib)
-            gazeCalib = torch.FloatTensor(gazeCalib)
-            
-            ori = self.get_orientation(gaze, gazeCalib)
-            oris.append(ori)
-
-            similarity = self.get_similarity(gaze, gazeCalib)
-            similarities.append(similarity)
-
-            calib = (imFaceCalib, imEyeLCalib, imEyeRCalib, faceGridCalib, landmarkCalib, gazeCalib)
-            calibs.append(calib)
-
-            delta = gaze - gazeCalib
-            deltas.append(delta)
-
-        return {'query':query, 'calibs':calibs, 'deltas':deltas, 'oris':oris, 'similarities':similarities, 'recNum': recNum}
+        return {'query':query}
     
         
     def __len__(self):

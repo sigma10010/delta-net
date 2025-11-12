@@ -165,7 +165,7 @@ class AFFModel(nn.Module):
         )
         
         self.rects_fc = nn.Sequential(
-            nn.Linear(25*25, 64),
+            nn.Linear(3*4, 64),
             nn.LeakyReLU(inplace=True),
             nn.Linear(64, 96),
             nn.LeakyReLU(inplace=True),
@@ -229,7 +229,7 @@ class AFFDelta(nn.Module):
         )
         
         self.rects_fc = nn.Sequential(
-            nn.Linear(25*25, 64),
+            nn.Linear(3*6, 64),
             nn.LeakyReLU(inplace=True),
             nn.Linear(64, 96),
             nn.LeakyReLU(inplace=True),

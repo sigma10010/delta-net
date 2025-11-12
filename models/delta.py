@@ -20,6 +20,29 @@ from models.itracker import EyeImageModel, FaceGridModel
 from models.itracker import FaceImageModel
 from models.kan import KAN
 
+class PointModel(nn.Module):
+    # Model for the 6 landmarks
+    def __init__(self):
+        super(PointModel, self).__init__()
+        
+        self.fc = nn.Sequential(
+            nn.Linear(3*6, 128),
+            nn.LeakyReLU(inplace=True),
+            nn.Linear(128, 16),
+            nn.LeakyReLU(inplace=True),
+            )
+        '''
+        self.fc = nn.Sequential(
+            KAN(layers_hidden = [gridSize * gridSize,128,16]),
+            nn.ReLU(inplace=True),
+            )
+        '''
+
+    def forward(self, x):
+        x = x.view(x.size(0), -1)
+        x = self.fc(x)
+        return x
+
 
 class DeltaGazeModel(nn.Module):
     '''
@@ -31,7 +54,7 @@ class DeltaGazeModel(nn.Module):
         super(DeltaGazeModel, self).__init__()
         self.eyeModel = EyeImageModel()
         self.faceModel = FaceImageModel()
-        self.gridModel = FaceGridModel()
+        self.gridModel = PointModel()
         
         # Joining everything
         self.featureFC = nn.Sequential(

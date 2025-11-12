@@ -198,7 +198,7 @@ class FaceGridModel(nn.Module):
         super(FaceGridModel, self).__init__()
         
         self.fc = nn.Sequential(
-            nn.Linear(gridSize * gridSize, 128),
+            nn.Linear(3*6, 128),
             nn.ReLU(inplace=True),
             nn.Linear(128, 16),
             nn.ReLU(inplace=True),
@@ -248,6 +248,7 @@ class ITrackerModel(nn.Module):
 
         # Cat all
         x = torch.cat((xEyeL, xEyeR, xFace, xGrid), 1)
+        # x = torch.cat((xEyeL, xEyeR, xFace), 1)
         x = self.fc(x)
         
         return x

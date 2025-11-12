@@ -103,7 +103,7 @@ class NewEyeImageModel(nn.Module):
             size = size0*2**(network_depth-1-i)
             self.featureBlocks.append(nn.Linear(size*size*32*2**i, 128))
 
-        self.ss = SS(M=n_scales, ch_in=128, r=8)
+        self.ss = SAFS_X(M=n_scales, ch_in=128, r=8)
         
         self.fc = nn.Sequential(
             # nn.Linear(7*7*32, 128),
@@ -294,18 +294,65 @@ class DepthModel(nn.Module):
         x = self.fc(x)
         return x
 
+class RectModel(nn.Module):
+    # Model for the 3 rectangles
+    def __init__(self):
+        super(RectModel, self).__init__()
+        
+        self.fc = nn.Sequential(
+            nn.Linear(3*4, 128),
+            nn.LeakyReLU(inplace=True),
+            nn.Linear(128, 32),
+            nn.LeakyReLU(inplace=True),
+            )
+        '''
+        self.fc = nn.Sequential(
+            KAN(layers_hidden = [gridSize * gridSize,128,16]),
+            nn.ReLU(inplace=True),
+            )
+        '''
+
+    def forward(self, x):
+        x = x.view(x.size(0), -1)
+        x = self.fc(x)
+        return x
+
+class PointModel(nn.Module):
+    # Model for the 6 landmarks
+    def __init__(self):
+        super(PointModel, self).__init__()
+        
+        self.fc = nn.Sequential(
+            nn.Linear(3*6, 128),
+            nn.LeakyReLU(inplace=True),
+            nn.Linear(128, 32),
+            nn.LeakyReLU(inplace=True),
+            )
+        '''
+        self.fc = nn.Sequential(
+            KAN(layers_hidden = [gridSize * gridSize,128,16]),
+            nn.ReLU(inplace=True),
+            )
+        '''
+
+    def forward(self, x):
+        x = x.view(x.size(0), -1)
+        x = self.fc(x)
+        return x
+
 class SASKModel(nn.Module):
 
-    def __init__(self):
+    def __init__(self, scales=2, kernels=1):
         super(SASKModel, self).__init__()
-        self.eyeModel = NewEyeImageModel(network_depth=3)
-        self.faceModel = NewEyeImageModel(network_depth=5)
-        self.gridModel = FaceGridModel()
-        self.depthModel = DepthModel()
+        self.eyeModel = NewEyeImageModel(network_depth=4, n_scales=scales, M=kernels)
+        self.faceModel = NewEyeImageModel(network_depth=5, n_scales=scales, M=kernels)
+        # self.gridModel = FaceGridModel()
+        # self.rectModel = RectModel()
+        # self.pointModel = PointModel()
         
         # Joining everything
         self.fc = nn.Sequential(
-          	nn.Linear(32*5, 128),
+          	nn.Linear(32*3, 128),
             nn.ReLU(inplace=True),
             nn.Linear(128, 2),
             )
@@ -314,8 +361,9 @@ class SASKModel(nn.Module):
         faces = query[0]
         eyesLeft = query[1]
         eyesRight = query[2]
-        faceGrids = query[3]
-        landmarks = query[4]
+        # faceGrids = query[3]
+        # rects = query[3]
+        # pnp_points = query[3]
         
         # Eye nets
         xEyeL = self.eyeModel(eyesLeft)
@@ -323,12 +371,81 @@ class SASKModel(nn.Module):
 
         # Face net
         xFace = self.faceModel(faces)
-        xGrid = self.gridModel(faceGrids)
 
-        xLandmark = self.depthModel(landmarks)
+        # xGrid = self.gridModel(faceGrids)
+        # xRects = self.rectModel(rects)
+        # xPoints = self.pointModel(pnp_points)
 
         # Cat all
-        x = torch.cat((xEyeL, xEyeR, xFace, xGrid, xLandmark), 1)
+        # x = torch.cat((xEyeL, xEyeR, xFace, xPoints), 1)
+        x = torch.cat((xEyeL, xEyeR, xFace), 1)
         x = self.fc(x)
         
         return x
+
+class SASKDelta(nn.Module):
+
+    def __init__(self):
+        super(SASKDelta, self).__init__()
+        self.eyeModel = NewEyeImageModel(network_depth=4)
+        self.faceModel = NewEyeImageModel(network_depth=5)
+        # self.gridModel = FaceGridModel()
+        # self.rectModel = RectModel()
+        self.pointModel = PointModel()
+        
+        # Joining everything
+        self.fc = nn.Sequential(
+            nn.Linear(32*4*2, 128),
+            nn.ReLU(inplace=True),
+            nn.Linear(128, 2),
+            )
+
+    def forward(self, query, calib):
+        faces = query[0]
+        eyesLeft = query[1]
+        eyesRight = query[2]
+        # faceGrids = query[3]
+        # rects = query[3]
+        pnp_points = query[3]
+        
+        # Eye nets
+        xEyeL = self.eyeModel(eyesLeft)
+        xEyeR = self.eyeModel(eyesRight)
+
+        # Face net
+        xFace = self.faceModel(faces)
+
+        # xGrid = self.gridModel(faceGrids)
+        # xRects = self.rectModel(rects)
+        xPoints = self.pointModel(pnp_points)
+
+        # Cat all
+        xq = torch.cat((xEyeL, xEyeR, xFace, xPoints), 1)
+
+        faces = calib[0]
+        eyesLeft = calib[1]
+        eyesRight = calib[2]
+        # faceGrids = calib[3]
+        # rects = calib[3]
+        pnp_points = calib[3]
+        
+        # Eye nets
+        xEyeL = self.eyeModel(eyesLeft)
+        xEyeR = self.eyeModel(eyesRight)
+
+        # Face net
+        xFace = self.faceModel(faces)
+
+        # xGrid = self.gridModel(faceGrids)
+        # xRects = self.rectModel(rects)
+        xPoints = self.pointModel(pnp_points)
+
+        # Cat all
+        xc = torch.cat((xEyeL, xEyeR, xFace, xPoints), 1)
+
+        x = torch.cat((xq, xc), 1)
+        x = self.fc(x)
+
+        gaze = calib[-1].cuda()+x
+
+        return {'delta': x, 'gaze': gaze}

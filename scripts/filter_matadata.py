@@ -3,7 +3,7 @@ import numpy as np
 import scipy.io as sio
 
 num_calib=9
-filename = '../metadata/metadata_device.mat'
+filename = '../metadata/metadata_mp.mat'
 metadata = sio.loadmat(filename, squeeze_me=True, struct_as_record=False)
 rec_nums = np.unique(metadata['labelRecNum'])
 rec_statistics = {}
@@ -14,7 +14,9 @@ for rec_num in rec_nums:
     if len(indices)<=num_calib:
         metadata['labelTrain'][indices]=0
         print(rec_num, len(indices))
-    
+    if len(indices)<=40:
+        metadata['labelTest'][indices]=0
+        print('test', rec_num, len(indices))
 #print(rec_statistics)
 # Write out metadata
 metaFile = os.path.join('../metadata/', 'metadata%d.mat'%num_calib)
